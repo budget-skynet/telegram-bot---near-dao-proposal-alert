@@ -13,12 +13,48 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 NEAR_RPC = "https://rpc.mainnet.near.org"
-ASTRO_DAO_FACTORY = "sputnik-dao.near"
-DEFAULT_DAO = "community.sputnik-dao.near"
 
-# ── RPC Helper ────────────────────────────────────────────────────────────────
+# Well-known DAO contracts on NEAR mainnet
+KNOWN_DAOS = {
+    "sputnik-dao": "sputnikv2.testnet",
+    "ref-finance": "ref-finance.sputnik-dao.near",
+    "aurora": "aurora.sputnik-dao.near",
+    "meta-pool": "meta-pool-dao.sputnik-dao.near",
+    "near-foundation": "nearfoundation.sputnik-dao.near",
+}
+
+DEFAULT_DAO = "ref-finance.sputnik-dao.near"
+
+# Proposal kind labels
+PROPOSAL_KIND_LABELS = {
+    "Transfer": "💸 Transfer",
+    "AddMemberToRole": "➕ Add Member",
+    "RemoveMemberFromRole": "➖ Remove Member",
+    "FunctionCall": "⚙️ Function Call",
+    "UpgradeSelf": "🔧 Upgrade Self",
+    "UpgradeRemote": "🔧 Upgrade Remote",
+    "SetStakingContract": "📌 Set Staking Contract",
+    "AddBounty": "🏆 Add Bounty",
+    "BountyDone": "✅ Bounty Done",
+    "Vote": "🗳️ Vote",
+    "ChangePolicy": "📜 Change Policy",
+    "ChangeConfig": "⚙️ Change Config",
+}
+
+STATUS_EMOJI = {
+    "InProgress": "🟡",
+    "Approved": "✅",
+    "Rejected": "❌",
+    "Removed": "🗑️",
+    "Expired": "⏰",
+    "Moved": "➡️",
+    "Failed": "💥",
+}
+
+# ── NEAR RPC Helper ───────────────────────────────────────────────────────────
+
 async def _rpc(method: str, params: dict) -> dict:
-    """Generic NEAR RPC call. Returns the 'result' field or raises."""
+    """Low-level async NEAR JSON-RPC call."""
     payload = {
         "jsonrpc": "2.0",
         "id": "dontcare",
@@ -26,32 +62,32 @@ async def _rpc(method: str, params: dict) -> dict:
         "params": params,
     }
     async with aiohttp.ClientSession() as session:
-        async with session.post(NEAR_RPC, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.post(
+            NEAR_RPC,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
             resp.raise_for_status()
             data = await resp.json()
             if "error" in data:
-                raise ValueError(data["error"].get("message", "RPC error"))
+                raise ValueError(f"RPC error: {data['error']}")
             return data.get("result", {})
 
 
 # ── NEAR Helper Functions ─────────────────────────────────────────────────────
-async def get_proposals(dao_account: str, from_index: int = 0, limit: int = 10) -> list:
-    """
-    Fetch proposals from an AstroDAO (Sputnik v2) contract.
-    Uses the `get_proposals` view method.
-    """
+
+async def _view_call(contract_id: str, method_name: str, args: dict) -> any:
+    """Call a view method on a NEAR smart contract."""
     import json, base64
 
-    args = {"from_index": from_index, "limit": limit}
     args_base64 = base64.b64encode(json.dumps(args).encode()).decode()
-
     result = await _rpc(
         "query",
         {
             "request_type": "call_function",
             "finality": "final",
-            "account_id": dao_account,
-            "method_name": "get_proposals",
+            "account_id": contract_id,
+            "method_name": method_name,
             "args_base64": args_base64,
         },
     )
@@ -59,375 +95,342 @@ async def get_proposals(dao_account: str, from_index: int = 0, limit: int = 10) 
     return json.loads(raw.decode())
 
 
-async def get_proposal(dao_account: str, proposal_id: int) -> dict:
-    """Fetch a single proposal by ID from an AstroDAO contract."""
-    import json, base64
-
-    args = {"id": proposal_id}
-    args_base64 = base64.b64encode(json.dumps(args).encode()).decode()
-
-    result = await _rpc(
-        "query",
-        {
-            "request_type": "call_function",
-            "finality": "final",
-            "account_id": dao_account,
-            "method_name": "get_proposal",
-            "args_base64": args_base64,
-        },
+async def get_proposals(dao_contract: str, from_index: int = 0, limit: int = 10) -> list:
+    """
+    Fetch proposals from a Sputnik DAO contract.
+    Returns a list of proposal objects.
+    """
+    proposals = await _view_call(
+        dao_contract,
+        "get_proposals",
+        {"from_index": from_index, "limit": limit},
     )
-    raw = bytes(result["result"])
-    return json.loads(raw.decode())
+    return proposals if isinstance(proposals, list) else []
 
 
-async def get_dao_policy(dao_account: str) -> dict:
-    """Fetch the DAO policy (roles, quorum, thresholds)."""
-    import json, base64
-
-    args_base64 = base64.b64encode(b"{}").decode()
-    result = await _rpc(
-        "query",
-        {
-            "request_type": "call_function",
-            "finality": "final",
-            "account_id": dao_account,
-            "method_name": "get_policy",
-            "args_base64": args_base64,
-        },
-    )
-    raw = bytes(result["result"])
-    return json.loads(raw.decode())
+async def get_proposal_count(dao_contract: str) -> int:
+    """Return the total number of proposals in the DAO."""
+    count = await _view_call(dao_contract, "get_proposal_count", {})
+    return int(count)
 
 
-async def get_last_proposal_id(dao_account: str) -> int:
-    """Return the total number of proposals (== last proposal id)."""
-    import json, base64
-
-    args_base64 = base64.b64encode(b"{}").decode()
-    result = await _rpc(
-        "query",
-        {
-            "request_type": "call_function",
-            "finality": "final",
-            "account_id": dao_account,
-            "method_name": "get_last_proposal_id",
-            "args_base64": args_base64,
-        },
-    )
-    raw = bytes(result["result"])
-    return json.loads(raw.decode())
+async def get_dao_policy(dao_contract: str) -> dict:
+    """Return the DAO policy (roles, quorum, vote period, etc.)."""
+    policy = await _view_call(dao_contract, "get_policy", {})
+    return policy if isinstance(policy, dict) else {}
 
 
-async def get_account_balance(account_id: str) -> dict:
-    """Return the NEAR account balance (useful for DAO treasury checks)."""
-    result = await _rpc(
-        "query",
-        {
-            "request_type": "view_account",
-            "finality": "final",
-            "account_id": account_id,
-        },
-    )
-    return result
+async def get_active_proposals(dao_contract: str, max_fetch: int = 50) -> list:
+    """
+    Return only proposals with status 'InProgress' from the most recent batch.
+    Fetches up to max_fetch proposals from the end of the list.
+    """
+    total = await get_proposal_count(dao_contract)
+    if total == 0:
+        return []
+    from_index = max(0, total - max_fetch)
+    limit = total - from_index
+    proposals = await get_proposals(dao_contract, from_index=from_index, limit=limit)
+    active = [p for p in proposals if p.get("status") == "InProgress"]
+    return active
+
+
+async def get_recent_proposals(dao_contract: str, limit: int = 5) -> list:
+    """Return the most recent N proposals regardless of status."""
+    total = await get_proposal_count(dao_contract)
+    if total == 0:
+        return []
+    from_index = max(0, total - limit)
+    actual_limit = total - from_index
+    proposals = await get_proposals(dao_contract, from_index=from_index, limit=actual_limit)
+    return list(reversed(proposals))  # newest first
 
 
 # ── Formatting Helpers ────────────────────────────────────────────────────────
-def _format_proposal(p: dict, idx: int | None = None) -> str:
-    """Return a nicely formatted proposal block (Markdown)."""
-    pid = p.get("id", idx or "?")
-    desc = p.get("description", "*(no description)*")
-    kind = p.get("kind", {})
-    kind_name = list(kind.keys())[0] if isinstance(kind, dict) and kind else str(kind)
-    status = p.get("status", "Unknown")
-    proposer = p.get("proposer", "Unknown")
-    vote_counts = p.get("vote_counts", {})
 
-    status_emoji = {
-        "InProgress": "🟡",
-        "Approved": "✅",
-        "Rejected": "❌",
-        "Removed": "🗑️",
-        "Expired": "⏰",
-        "Moved": "📦",
-        "Failed": "💥",
-    }.get(status, "❓")
-
-    votes_line = ""
-    if vote_counts:
-        parts = []
-        for role, counts in vote_counts.items():
-            yes = counts[0] if len(counts) > 0 else 0
-            no = counts[1] if len(counts) > 1 else 0
-            abstain = counts[2] if len(counts) > 2 else 0
-            parts.append(f"`{role}` ✅{yes} ❌{no} ➖{abstain}")
-        votes_line = "\n🗳 *Votes:* " + " | ".join(parts)
-
-    # Truncate long descriptions
-    if len(desc) > 200:
-        desc = desc[:197] + "…"
-
-    return (
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📋 *Proposal #{pid}*\n"
-        f"📝 {desc}\n"
-        f"🔖 *Type:* `{kind_name}`\n"
-        f"👤 *Proposer:* `{proposer}`\n"
-        f"{status_emoji} *Status:* `{status}`"
-        f"{votes_line}\n"
-    )
-
-
-def _yocto_to_near(yocto: str) -> str:
+def _format_yocto(yocto_str: str) -> str:
     """Convert yoctoNEAR string to a human-readable NEAR amount."""
     try:
-        val = int(yocto) / 1e24
-        return f"{val:,.4f} NEAR"
+        yocto = int(yocto_str)
+        near = yocto / 1e24
+        return f"{near:,.4f} NEAR"
     except Exception:
-        return yocto
+        return yocto_str
+
+
+def _short(text: str, max_len: int = 80) -> str:
+    return text if len(text) <= max_len else text[:max_len] + "…"
+
+
+def _kind_label(kind) -> str:
+    if isinstance(kind, str):
+        return PROPOSAL_KIND_LABELS.get(kind, kind)
+    if isinstance(kind, dict):
+        k = list(kind.keys())[0]
+        label = PROPOSAL_KIND_LABELS.get(k, k)
+        details = kind[k]
+        if k == "Transfer" and isinstance(details, dict):
+            receiver = details.get("receiver_id", "?")
+            amount = _format_yocto(str(details.get("amount", 0)))
+            token = details.get("token_id") or "NEAR"
+            return f"{label} → {receiver}\n      Amount: {amount} ({token})"
+        if k == "FunctionCall" and isinstance(details, dict):
+            receiver = details.get("receiver_id", "?")
+            actions = details.get("actions", [])
+            methods = ", ".join(a.get("method_name", "?") for a in actions)
+            return f"{label} on {receiver}\n      Methods: {methods}"
+        return label
+    return str(kind)
+
+
+def _format_proposal(proposal: dict, index: int = None) -> str:
+    """Format a single proposal into a nice Telegram message block."""
+    pid = proposal.get("id", "?")
+    proposer = proposal.get("proposer", "unknown")
+    description = _short(proposal.get("description", "No description"), 120)
+    status = proposal.get("status", "Unknown")
+    status_icon = STATUS_EMOJI.get(status, "⚪")
+    kind = proposal.get("kind", "Unknown")
+    kind_str = _kind_label(kind)
+
+    votes = proposal.get("votes", {})
+    vote_counts = proposal.get("vote_counts", {})
+
+    # Vote summary
+    approve = votes.get("Approve", 0) if isinstance(votes, dict) else 0
+    reject = votes.get("Reject", 0) if isinstance(votes, dict) else 0
+    remove = votes.get("Remove", 0) if isinstance(votes, dict) else 0
+
+    lines = [
+        f"{'─'*36}",
+        f"📋 *Proposal #{pid}*",
+        f"👤 *Proposer:* `{proposer}`",
+        f"📝 *Description:* {description}",
+        f"🔖 *Kind:* {kind_str}",
+        f"{status_icon} *Status:* {status}",
+        f"🗳️ *Votes:* ✅ {approve}  ❌ {reject}  🗑️ {remove}",
+    ]
+    return "\n".join(lines)
+
+
+def _resolve_dao(args: list) -> str:
+    """Resolve DAO contract from user args or use default."""
+    if args:
+        candidate = args[0].lower()
+        if candidate in KNOWN_DAOS:
+            return KNOWN_DAOS[candidate]
+        if ".near" in candidate or ".testnet" in candidate:
+            return candidate
+    return DEFAULT_DAO
 
 
 # ── /start and /help ──────────────────────────────────────────────────────────
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Welcome message."""
+    """Welcome message with bot overview."""
     text = (
-        "👋 *Welcome to the NEAR DAO Proposal Alert Bot!*\n\n"
-        "Stay informed about governance proposals across NEAR AstroDAO DAOs.\n\n"
-        "📡 *Available Commands:*\n"
-        "▸ /proposals `[dao]` — List latest 5 proposals\n"
-        "▸ /proposal `[dao]` `[id]` — View a specific proposal\n"
-        "▸ /policy `[dao]` — View DAO voting policy\n"
-        "▸ /treasury `[dao]` — Check DAO treasury balance\n"
-        "▸ /latest `[dao]` — Get the latest proposal only\n"
-        "▸ /help — Show this help message\n\n"
-        "💡 *Default DAO:* `community.sputnik-dao.near`\n"
-        "You can pass any Sputnik v2 DAO account as an argument.\n\n"
-        "🌐 Powered by [NEAR Protocol](https://near.org)"
+        "🌐 *NEAR DAO Proposal Alert Bot* 🚀\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Stay on top of every vote and proposal across NEAR DAOs!\n\n"
+        "⚡ *Quick Commands:*\n"
+        "  /proposals — Latest proposals (any DAO)\n"
+        "  /active — Active (in-progress) proposals\n"
+        "  /stats — DAO statistics & policy info\n"
+        "  /daos — List known DAOs\n"
+        "  /help — Full help & usage guide\n\n"
+        "📌 *Default DAO:* `ref-finance.sputnik-dao.near`\n\n"
+        "💡 Tip: Pass a DAO name or contract after any command:\n"
+        "  `/proposals aurora` or\n"
+        "  `/proposals aurora.sputnik-dao.near`\n\n"
+        "🔗 Join the NEAR ecosystem → https://near.org"
     )
-    await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
-
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Help message — same as start."""
-    await start(update, context)
-
-
-# ── Command Handlers ──────────────────────────────────────────────────────────
-async def proposals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    /proposals [dao_account]
-    Lists the 5 most recent proposals of the given (or default) DAO.
-    """
-    dao = context.args[0] if context.args else DEFAULT_DAO
-    await update.message.reply_text(f"🔍 Fetching proposals from `{dao}` …", parse_mode="Markdown")
-
-    try:
-        last_id = await get_last_proposal_id(dao)
-        from_index = max(0, last_id - 5)
-        props = await get_proposals(dao, from_index=from_index, limit=5)
-    except Exception as exc:
-        logger.exception("proposals error")
-        await update.message.reply_text(f"❌ Error fetching proposals:\n`{exc}`", parse_mode="Markdown")
-        return
-
-    if not props:
-        await update.message.reply_text("ℹ️ No proposals found for this DAO.")
-        return
-
-    header = f"📊 *Latest Proposals — `{dao}`*\nTotal proposals: *{last_id}*\n\n"
-    body = "\n".join(_format_proposal(p) for p in reversed(props))
-    full = header + body
-
-    # Telegram max message length is 4096
-    for chunk_start in range(0, len(full), 4000):
-        await update.message.reply_text(full[chunk_start:chunk_start + 4000], parse_mode="Markdown")
-
-
-async def proposal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    /proposal [dao_account] [proposal_id]
-    Shows details of a single proposal.
-    """
-    if len(context.args) < 2:
-        await update.message.reply_text(
-            "⚠️ Usage: `/proposal <dao_account> <proposal_id>`\n"
-            "Example: `/proposal community.sputnik-dao.near 42`",
-            parse_mode="Markdown",
-        )
-        return
-
-    dao = context.args[0]
-    try:
-        pid = int(context.args[1])
-    except ValueError:
-        await update.message.reply_text("❌ Proposal ID must be a number.", parse_mode="Markdown")
-        return
-
-    await update.message.reply_text(f"🔍 Fetching proposal #{pid} from `{dao}` …", parse_mode="Markdown")
-
-    try:
-        p = await get_proposal(dao, pid)
-    except Exception as exc:
-        logger.exception("proposal error")
-        await update.message.reply_text(f"❌ Error: `{exc}`", parse_mode="Markdown")
-        return
-
-    text = f"📊 *Proposal Details — `{dao}`*\n\n" + _format_proposal(p)
-
-    # Show extra kind details
-    kind = p.get("kind", {})
-    if isinstance(kind, dict):
-        kind_key = list(kind.keys())[0] if kind else None
-        if kind_key == "Transfer":
-            t = kind["Transfer"]
-            token = t.get("token_id") or "NEAR"
-            amount = _yocto_to_near(t.get("amount", "0")) if token == "NEAR" else t.get("amount", "0")
-            receiver = t.get("receiver_id", "?")
-            text += f"\n💸 *Transfer:* {amount} → `{receiver}`\n"
-        elif kind_key == "AddMemberToRole":
-            m = kind["AddMemberToRole"]
-            text += f"\n👥 *Add Member:* `{m.get('member_id')}` → role `{m.get('role')}`\n"
-        elif kind_key == "RemoveMemberFromRole":
-            m = kind["RemoveMemberFromRole"]
-            text += f"\n🚫 *Remove Member:* `{m.get('member_id')}` from role `{m.get('role')}`\n"
-
-    submission_time_ns = p.get("submission_time")
-    if submission_time_ns:
-        try:
-            import datetime
-            ts = int(submission_time_ns) / 1e9
-            dt = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M UTC")
-            text += f"🕐 *Submitted:* {dt}\n"
-        except Exception:
-            pass
-
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
-async def policy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    /policy [dao_account]
-    Shows the DAO voting policy and roles.
-    """
-    dao = context.args[0] if context.args else DEFAULT_DAO
-    await update.message.reply_text(f"🔍 Fetching policy for `{dao}` …", parse_mode="Markdown")
-
-    try:
-        pol = await get_dao_policy(dao)
-    except Exception as exc:
-        logger.exception("policy error")
-        await update.message.reply_text(f"❌ Error: `{exc}`", parse_mode="Markdown")
-        return
-
-    roles = pol.get("roles", [])
-    proposal_bond = _yocto_to_near(pol.get("proposal_bond", "0"))
-    proposal_period_ns = pol.get("proposal_period", "0")
-
-    try:
-        days = int(proposal_period_ns) / (1e9 * 86400)
-        period_str = f"{days:.1f} days"
-    except Exception:
-        period_str = str(proposal_period_ns)
-
-    lines = [
-        f"🏛 *DAO Policy — `{dao}`*\n",
-        f"💰 *Proposal Bond:* {proposal_bond}",
-        f"⏳ *Proposal Period:* {period_str}",
-        f"👥 *Roles ({len(roles)}):*",
-    ]
-
-    for role in roles:
-        name = role.get("name", "?")
-        kind = role.get("kind", {})
-        if "Everyone" in kind:
-            members_info = "Everyone"
-        elif "Member" in kind:
-            members_info = f"{len(kind['Member'])} members"
-        else:
-            members_info = str(kind)
-
-        permissions = role.get("vote_policy", {})
-        perm_count = len(permissions)
-        lines.append(f"  • `{name}` — {members_info} | {perm_count} vote policies")
-
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-
-async def treasury(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    /treasury [dao_account]
-    Shows the DAO account's NEAR balance (treasury).
-    """
-    dao = context.args[0] if context.args else DEFAULT_DAO
-    await update.message.reply_text(f"🔍 Checking treasury for `{dao}` …", parse_mode="Markdown")
-
-    try:
-        acct = await get_account_balance(dao)
-    except Exception as exc:
-        logger.exception("treasury error")
-        await update.message.reply_text(f"❌ Error: `{exc}`", parse_mode="Markdown")
-        return
-
-    total = _yocto_to_near(acct.get("amount", "0"))
-    locked = _yocto_to_near(acct.get("locked", "0"))
-    storage_bytes = acct.get("storage_usage", 0)
-
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Detailed help message."""
     text = (
-        f"💎 *Treasury — `{dao}`*\n\n"
-        f"💰 *Total Balance:* {total}\n"
-        f"🔒 *Locked (staked):* {locked}\n"
-        f"💾 *Storage Used:* {storage_bytes:,} bytes\n\n"
-        f"🔗 [View on NEAR Explorer](https://explorer.near.org/accounts/{dao})"
+        "📖 *NEAR DAO Proposal Alert Bot — Help*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "*Commands:*\n\n"
+        "🔹 /start — Welcome & quick intro\n\n"
+        "🔹 /proposals `[dao]` `[limit]`\n"
+        "   Show the most recent proposals.\n"
+        "   Example: `/proposals aurora 10`\n\n"
+        "🔹 /active `[dao]`\n"
+        "   Show only InProgress proposals.\n"
+        "   Example: `/active meta-pool`\n\n"
+        "🔹 /stats `[dao]`\n"
+        "   DAO statistics: total proposals,\n"
+        "   vote period, roles, bond required.\n"
+        "   Example: `/stats ref-finance`\n\n"
+        "🔹 /daos\n"
+        "   List all known DAO shortcuts.\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "*Known DAO shortcuts:*\n"
+        "  `sputnik-dao`, `ref-finance`,\n"
+        "  `aurora`, `meta-pool`, `near-foundation`\n\n"
+        "You can also pass any full `.sputnik-dao.near`\n"
+        "contract address directly.\n\n"
+        "🌐 Learn more: https://near.org/dao"
     )
-    await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
-async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# ── Command Handlers ──────────────────────────────────────────────────────────
+
+async def proposals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    /latest [dao_account]
-    Shows only the single most recent proposal.
+    /proposals [dao] [limit]
+    Show the most recent proposals from a DAO.
     """
-    dao = context.args[0] if context.args else DEFAULT_DAO
-    await update.message.reply_text(f"🔍 Fetching latest proposal from `{dao}` …", parse_mode="Markdown")
+    args = context.args or []
+
+    # Parse optional limit (last arg if numeric)
+    limit = 5
+    if args and args[-1].isdigit():
+        limit = min(int(args[-1]), 10)
+        args = args[:-1]
+
+    dao_contract = _resolve_dao(args)
+
+    await update.message.reply_text(
+        f"🔍 Fetching last *{limit}* proposals from\n`{dao_contract}` …",
+        parse_mode="Markdown",
+    )
 
     try:
-        last_id = await get_last_proposal_id(dao)
-        if last_id == 0:
-            await update.message.reply_text("ℹ️ This DAO has no proposals yet.")
+        proposals = await get_recent_proposals(dao_contract, limit=limit)
+        if not proposals:
+            await update.message.reply_text(
+                "📭 No proposals found for this DAO.", parse_mode="Markdown"
+            )
             return
-        p = await get_proposal(dao, last_id - 1)
+
+        header = (
+            f"📋 *Recent Proposals*\n"
+            f"🏛️ DAO: `{dao_contract}`\n"
+            f"Total shown: *{len(proposals)}*\n"
+        )
+        await update.message.reply_text(header, parse_mode="Markdown")
+
+        for proposal in proposals:
+            msg = _format_proposal(proposal)
+            await update.message.reply_text(msg, parse_mode="Markdown")
+
     except Exception as exc:
-        logger.exception("latest error")
-        await update.message.reply_text(f"❌ Error: `{exc}`", parse_mode="Markdown")
-        return
-
-    text = (
-        f"🆕 *Latest Proposal — `{dao}`*\n"
-        f"📊 Total proposals in DAO: *{last_id}*\n\n"
-        + _format_proposal(p)
-        + f"\n🔗 [View on AstroDAO](https://app.astrodao.com/dao/{dao}/proposals/{p.get('id', last_id - 1)})"
-    )
-    await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
+        logger.exception("proposals_command failed")
+        await update.message.reply_text(
+            f"❌ Error fetching proposals:\n`{exc}`\n\n"
+            "Make sure the DAO contract is correct.",
+            parse_mode="Markdown",
+        )
 
 
-# ── Entry Point ───────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    if not TOKEN:
-        raise RuntimeError("Set the TELEGRAM_BOT_TOKEN environment variable.")
+async def active_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /active [dao]
+    Show only proposals currently in-progress (open for voting).
+    """
+    args = context.args or []
+    dao_contract = _resolve_dao(args)
 
-    app = (
-        ApplicationBuilder()
-        .token(TOKEN)
-        .build()
+    await update.message.reply_text(
+        f"🟡 Fetching *active* proposals from\n`{dao_contract}` …",
+        parse_mode="Markdown",
     )
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("proposals", proposals))
-    app.add_handler(CommandHandler("proposal", proposal))
-    app.add_handler(CommandHandler("policy", policy))
-    app.add_handler(CommandHandler("treasury", treasury))
-    app.add_handler(
+    try:
+        active = await get_active_proposals(dao_contract, max_fetch=50)
+
+        if not active:
+            await update.message.reply_text(
+                f"✅ No active proposals found in `{dao_contract}`.\n"
+                "All caught up!",
+                parse_mode="Markdown",
+            )
+            return
+
+        header = (
+            f"🟡 *Active Proposals (Open for Voting)*\n"
+            f"🏛️ DAO: `{dao_contract}`\n"
+            f"Found: *{len(active)}* open proposals\n"
+        )
+        await update.message.reply_text(header, parse_mode="Markdown")
+
+        for proposal in active[:8]:  # cap display at 8
+            msg = _format_proposal(proposal)
+            await update.message.reply_text(msg, parse_mode="Markdown")
+
+        if len(active) > 8:
+            await update.message.reply_text(
+                f"⚠️ Showing first 8 of {len(active)} active proposals.\n"
+                "Use `/proposals` for paginated access.",
+                parse_mode="Markdown",
+            )
+
+    except Exception as exc:
+        logger.exception("active_command failed")
+        await update.message.reply_text(
+            f"❌ Error fetching active proposals:\n`{exc}`",
+            parse_mode="Markdown",
+        )
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /stats [dao]
+    Show DAO statistics: proposal count, policy, roles.
+    """
+    args = context.args or []
+    dao_contract = _resolve_dao(args)
+
+    await update.message.reply_text(
+        f"📊 Loading stats for\n`{dao_contract}` …",
+        parse_mode="Markdown",
+    )
+
+    try:
+        total, policy = await _gather_stats(dao_contract)
+
+        # Vote period (nanoseconds → human)
+        vote_period_ns = int(policy.get("proposal_period", 0))
+        vote_period_days = vote_period_ns / 1e9 / 86400
+        bond_str = _format_yocto(str(policy.get("proposal_bond", 0)))
+
+        # Roles summary
+        roles = policy.get("roles", [])
+        role_lines = []
+        for role in roles[:6]:
+            name = role.get("name", "?")
+            kind = role.get("kind", {})
+            if isinstance(kind, dict) and "Group" in kind:
+                members = kind["Group"]
+                role_lines.append(f"  • *{name}* — {len(members)} member(s)")
+            elif kind == "Everyone" or (isinstance(kind, str) and kind == "Everyone"):
+                role_lines.append(f"  • *{name}* — Everyone")
+            else:
+                role_lines.append(f"  • *{name}* — {kind}")
+
+        roles_text = "\n".join(role_lines) if role_lines else "  No roles found"
+
+        # Default vote policy
+        dvp = policy.get("default_vote_policy", {})
+        threshold = dvp.get("threshold", "?")
+        weight_kind = dvp.get("weight_kind", "?")
+
+        text = (
+            f"📊 *DAO Statistics*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🏛️ *Contract:* `{dao_contract}`\n\n"
+            f"📋 *Total Proposals:* {total}\n"
+            f"⏳ *Vote Period:* {vote_period_days:.1f} days\n"
+            f"💰 *Proposal Bond:* {bond_str}\n\n"
+            f"🗳️ *Default Vote Policy:*\n"
+            f"  Threshold: `{threshold}`\n"
+            f"  Weight Kind: `{weight_kind}`\n\n"
+            f"👥 *Roles ({len(roles)}):*\n{roles_text}\n\n"
+            f"🔗 Explorer: https://explorer.near.org/accounts/{dao
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
@@ -435,11 +438,9 @@ def main() -> None:
     application = ApplicationBuilder().token(token).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("proposals", proposals))
-    application.add_handler(CommandHandler("proposal", proposal))
-    application.add_handler(CommandHandler("policy", policy))
-    application.add_handler(CommandHandler("treasury", treasury))
-    application.add_handler(CommandHandler("latest", latest))
+    application.add_handler(CommandHandler("proposals", proposals_command))
+    application.add_handler(CommandHandler("active", active_command))
+    application.add_handler(CommandHandler("stats", stats_command))
     application.run_polling()
 
 if __name__ == "__main__":
