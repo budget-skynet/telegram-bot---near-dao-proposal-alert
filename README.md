@@ -1,6 +1,6 @@
 # NEAR DAO Proposal Alert Bot
 
-A Telegram bot that delivers real-time alerts and updates for NEAR Protocol DAO proposals. Stay informed about active governance proposals, track voting progress, and engage with the NEAR ecosystem — all without leaving Telegram.
+A Telegram bot that delivers real-time alerts and information about NEAR Protocol DAO proposals. Users can browse active proposals, inspect DAO policies, and stay engaged with the NEAR ecosystem — all without leaving Telegram.
 
 ---
 
@@ -8,7 +8,6 @@ A Telegram bot that delivers real-time alerts and updates for NEAR Protocol DAO 
 
 - Python 3.9+
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
-- Internet access to query NEAR on-chain data
 
 ---
 
@@ -24,12 +23,15 @@ pip install -r requirements.txt
 
 1. Open Telegram and start a chat with [@BotFather](https://t.me/BotFather)
 2. Send `/newbot` and follow the prompts to create your bot
-3. Copy the token provided by BotFather
-4. Set it as an environment variable:
+3. Copy the token provided and set it as an environment variable:
 
 export BOT_TOKEN=your_telegram_bot_token_here
 
-Or create a `.env` file in the project root:
+On Windows:
+
+set BOT_TOKEN=your_telegram_bot_token_here
+
+You can also create a `.env` file in the project root:
 
 BOT_TOKEN=your_telegram_bot_token_here
 
@@ -39,30 +41,29 @@ BOT_TOKEN=your_telegram_bot_token_here
 
 python bot.py
 
-The bot will start polling for messages. You should see a confirmation log line once it is connected and ready.
-
 ---
 
 ## Available Commands
 
 | Command | Description |
 |---|---|
-| `/start` | Start the bot and see the welcome message |
-| `/help` | Display help and usage information |
-| `/proposals` | List all DAO proposals |
-| `/active` | Show currently active proposals open for voting |
-| `/stats` | Display summary statistics for proposals and DAOs |
+| `/start` | Start the bot and see a welcome message |
+| `/help` | Display help information and command list |
+| `/proposals` | List all active DAO proposals |
+| `/proposal` | Get details about a specific proposal |
+| `/daos` | Browse available NEAR DAOs |
+| `/policy` | View the governance policy for a DAO |
 
 ---
 
 ## Deploy
 
-For a one-command cloud deploy, push to [Railway](https://railway.app) or [Heroku](https://heroku.com) using the included `Procfile`:
+**Railway** (recommended): Push to GitHub, connect the repo in [Railway](https://railway.app), and set the `BOT_TOKEN` environment variable in the project settings.
 
-worker: python bot.py
+**Heroku**: Add a `Procfile` containing `worker: python bot.py`, then run:
 
-railway up
-# or
+heroku create
+heroku config:set BOT_TOKEN=your_token_here
 git push heroku main
 
 ---
@@ -77,12 +78,6 @@ near-dao-alert-bot/
 
 ---
 
-## Contributing
-
-Pull requests are welcome. Open an issue first to discuss any major changes.
-
----
-
 ## License
 
-[MIT](LICENSE)
+MIT
