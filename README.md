@@ -1,6 +1,6 @@
 # NEAR DAO Proposal Alert Bot
 
-A Telegram bot that delivers real-time alerts and information about NEAR Protocol DAO proposals. Users can browse active proposals, fetch details by ID, and stay connected with the NEAR governance ecosystem — all from within Telegram.
+A Telegram bot that delivers real-time alerts and information about NEAR Protocol DAO proposals. Users can browse active proposals, check DAO details, and stay engaged with the NEAR ecosystem — all without leaving Telegram.
 
 ---
 
@@ -23,12 +23,15 @@ pip install -r requirements.txt
 
 1. Open Telegram and start a chat with [@BotFather](https://t.me/BotFather)
 2. Send `/newbot` and follow the prompts to create your bot
-3. Copy the token BotFather provides
-4. Set it as an environment variable:
+3. Copy the token provided and set it as an environment variable:
 
 export BOT_TOKEN=your_telegram_bot_token_here
 
-Or create a `.env` file in the project root:
+On Windows:
+
+set BOT_TOKEN=your_telegram_bot_token_here
+
+You can also create a `.env` file in the project root:
 
 BOT_TOKEN=your_telegram_bot_token_here
 
@@ -45,12 +48,11 @@ python bot.py
 | Command | Description |
 |---|---|
 | `/start` | Start the bot and see the welcome message |
-| `/help` | Display available commands and usage info |
+| `/help` | Display help and usage information |
 | `/proposals` | List all DAO proposals |
-| `/proposal` | Fetch details for a specific proposal by ID |
-| `/active` | Show currently active proposals open for voting |
-| `/daoinfo` | Display information about a specific DAO |
-| `/latest` | Show the most recently submitted proposals |
+| `/active` | Show currently active proposals |
+| `/proposal` | Get details on a specific proposal |
+| `/daoinfo` | View information about a specific DAO |
 
 ---
 
@@ -60,13 +62,13 @@ Deploy instantly to [Railway](https://railway.app) or [Heroku](https://heroku.co
 
 worker: python bot.py
 
-Push your code, set the `BOT_TOKEN` environment variable in your platform's dashboard, and the bot will run continuously in the background.
+Push to your platform of choice and set `BOT_TOKEN` in the environment variables dashboard. The bot will start automatically.
 
 ---
 
-## The Viral Loop
+## How It Works
 
-User discovers bot → Gets live NEAR governance data → Engages with NEAR ecosystem
+Users interact with the bot → receive live NEAR DAO proposal data → stay informed and engaged with the NEAR ecosystem. The bot polls the NEAR blockchain for proposal updates and formats results clearly for a smooth Telegram experience.
 
 ---
 
